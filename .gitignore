@@ -12,4 +12,6 @@ config.py
 .DS_Store
 
 user_memories/
+torch_env/
+__pycache__/
     
