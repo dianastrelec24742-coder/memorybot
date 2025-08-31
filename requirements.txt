@@ -32,7 +32,7 @@ networkx==3.5
 numpy==1.26.4
 packaging==25.0
 pillow==11.3.0
-pinecone-client==6.0.0
+pinecone
 pinecone-plugin-interface==0.0.7
 proto-plus==1.26.1
 protobuf==5.29.5
