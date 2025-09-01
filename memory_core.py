@@ -71,8 +71,8 @@ try:
     # --- 3. ИСПРАВЛЯЕМ создание клиента Redis ---
     # Теперь передаем только полный URL.
     # Метод from_url сам извлечет пароль, хост, порт и включит SSL (потому что URL начинается с rediss://)
-    redis_client = Redis.from_url(UPSTASH_FULL_URL, decode_responses=True)
-    logger.info("Успешно подключились к Pinecone и Redis (Upstash).")
+    redis_client = Redis.from_url(UPSTASH_FULL_URL, decode_responses=True, health_check_interval=30)
+    
 
 
 except Exception as e:
