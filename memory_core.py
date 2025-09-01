@@ -39,18 +39,19 @@ def get_model():
 # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 
-# --- Подключение к облачным сервисам ---
+# --- Подключение к облачным сервисам (ИСПРАВЛЕННАЯ ВЕРСИЯ) ---
 try:
-    # Pinecone
+    # Pinecone (без изменений)
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
     PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
     
-    # Upstash Redis
-    UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL")
-    UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
+    # --- 1. УДАЛЯЕМ лишнюю переменную для токена ---
+    # Upstash Redis - теперь используем только одну полную URL
+    UPSTASH_FULL_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 
-    if not all([PINECONE_API_KEY, PINECONE_ENVIRONMENT, PINECONE_INDEX_NAME, UPSTASH_URL, UPSTASH_TOKEN]):
+    # --- 2. УПРОЩАЕМ проверку переменных ---
+    if not all([PINECONE_API_KEY, PINECONE_ENVIRONMENT, PINECONE_INDEX_NAME, UPSTASH_FULL_URL]):
         raise ValueError("Одна или несколько переменных окружения для Pinecone/Upstash не установлены!")
 
     pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -59,17 +60,24 @@ try:
         logger.warning(f"Индекс Pinecone '{PINECONE_INDEX_NAME}' не найден. Создаю новый...")
         pc.create_index(
             name=PINECONE_INDEX_NAME,
-            dimension=VECTOR_DIMENSION, # <--- ИЗМЕНЕНО: Используем нашу переменную-константу
+            dimension=VECTOR_DIMENSION,
             metric="cosine",
             spec=PodSpec(environment=PINECONE_ENVIRONMENT)
         )
         logger.info(f"Индекс '{PINECONE_INDEX_NAME}' успешно создан.")
     
     pinecone_index = pc.Index(PINECONE_INDEX_NAME)
-    redis_client = Redis.from_url(UPSTASH_URL, password=UPSTASH_TOKEN, decode_responses=True)
+
+    # --- 3. ИСПРАВЛЯЕМ создание клиента Redis ---
+    # Теперь передаем только полный URL.
+    # Метод from_url сам извлечет пароль, хост, порт и включит SSL (потому что URL начинается с rediss://)
+    redis_client = Redis.from_url(UPSTASH_FULL_URL, decode_responses=True)
+    logger.info("Успешно подключились к Pinecone и Redis (Upstash).")
+
 
 except Exception as e:
-    logger.critical(f"КРИТИЧЕСКАЯ ОШИБКА при инициализации облачных сервисов: {e}")
+    logger.critical(f"КРИТИЧЕСКАЯ ОШИБКА при инициализации облачных сервисов: {e}", exc_info=True)
+    # exc_info=True добавлено для более детальных логов ошибки
     exit()
 
 class MemoryCore:

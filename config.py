@@ -1,3 +1,5 @@
+# --- ИСПРАВЛЕННАЯ ВЕРСИЯ config.py ---
+
 import os
 from dotenv import load_dotenv
 
@@ -12,21 +14,22 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 # Секреты для облачной памяти
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME") # Имя индекса тоже лучше хранить здесь
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME") 
 UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL")
-UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
+# СТРОКА НИЖЕ БЫЛА УДАЛЕНА, ТАК КАК ТОКЕН ТЕПЕРЬ ЯВЛЯЕТСЯ ЧАСТЬЮ URL
+# UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
 
 # --- НАСТРОЙКИ МОДЕЛЕЙ ---
 # Словарь с доступными моделями. Ключ - то, что пишет пользователь, значение - реальное имя модели для API.
 AVAILABLE_MODELS = {
-    "pro": "gemini-2.5-pro",
-    "flash": "gemini-2.0-flash",
+    "pro": "gemini-1.5-pro-latest",
+    "flash": "gemini-1.5-flash-latest",
 }
 # Модель по умолчанию, если пользователь не выбрал другую.
-DEFAULT_GEMINI_MODEL = os.getenv("DEFAULT_GEMINI_MODEL", "gemini-2.5-pro")
+DEFAULT_GEMINI_MODEL = os.getenv("DEFAULT_GEMINI_MODEL", "gemini-1.5-pro-latest")
 # Модель для быстрых задач, таких как роутер.
-ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gemini-2.0-flash")
+ROUTER_MODEL = os.getenv("ROUTER_MODEL", "gemini-1.5-flash-latest")
 
 
 # --- НАСТРОЙКИ ПАМЯТИ И ЛИМИТОВ ---
