@@ -138,6 +138,9 @@ async def summarize_history(history_chunk: list) -> str:
 # Краткосрочная история теперь хранится только в оперативной памяти (в context.user_data).
 
 async def send_long_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, parse_mode: str = 'MarkdownV2'):
+    if not text or not text.strip():
+        logger.warning("Попытка отправить пустое сообщение была перехвачена и отменена в send_long_message.")
+        return
     MAX_LENGTH = 4096
     parts = []
     text_to_split = text
@@ -369,24 +372,32 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
 
                 break 
 
-            if response and response.parts:
-                bot_response_text_raw = response.text
+                        # Мы проверяем не наличие 'parts', а наличие самого текста в ответе.
+            # Проверяем, удалось ли получить адекватный ответ от Gemini
+            if response and response.text and response.text.strip():
+                # --- БЛОК УСПЕШНОГО ОТВЕТА ---
+                bot_response_text_raw = response.text.strip()
+                
+                # 1. Добавляем диалог в краткосрочную историю
                 context.user_data['history'].append({'role': 'user', 'parts': user_parts})
                 context.user_data['history'].append({'role': 'model', 'parts': [bot_response_text_raw]})
-            else:
-                bot_response_text_raw = "Я несколько раз попытался сформулировать ответ, но мои слова постоянно блокируются. Давай попробуем зайти с другой стороны?"
-                logger.error(f"Не удалось сгенерировать ответ для {user_id} после {max_attempts} попыток.")
 
+                # 2. ✅ ВОТ ИСПРАВЛЕНИЕ: СРАЗУ ЖЕ сохраняем успешный диалог в долгосрочную память
+                logger.info(f"Сохраняем диалог в долгосрочную память для {user_id}...")
+                full_context_chunk = f"Пользователь: {final_user_input_for_ltm}\nGemini: {bot_response_text_raw}"
+                await ltm.add_to_memory(full_context_chunk)
+
+            else:
+                # --- БЛОК НЕУДАЧНОГО ОТВЕТА ---
+                bot_response_text_raw = "Мне почему-то не удалось сформулировать ответ. Возможно, мой внутренний фильтр сработал. Попробуй перефразировать свой запрос."
+                logger.error(f"Не удалось сгенерировать ответ для {user_id} (ответ от API был пуст или заблокирован).")
+
+            # Отправляем сообщение пользователю (либо успешный ответ, либо сообщение об ошибке)
             await send_long_message(context, chat_id, bot_response_text_raw, parse_mode='MarkdownV2')
 
-            # === СОХРАНЕНИЕ В ПАМЯТЬ И СЖАТИЕ ИСТОРИИ ===
-            if response and response.parts:
-                logger.info(f"Сохраняем диалог в долгосрочную память для {user_id}...")
-                full_context_chunk = f"Пользователь: {final_user_input_for_ltm}\
-Gemini: {bot_response_text_raw}"
-                await ltm.add_to_memory(full_context_chunk)
-           
+            # === СЖАТИЕ ИСТОРИИ (этот блок выполняется всегда в конце) ===
             if len(context.user_data['history']) > config.MAX_HISTORY_MESSAGES:
+                # --> потому что он выполняется только когда if истинно.
                 logger.info(f"История для {user_id} слишком длинная, запускаем сжатие...")
                 messages_to_keep = config.MAX_HISTORY_MESSAGES - 2
                 messages_to_summarize = context.user_data['history'][:-messages_to_keep]
@@ -395,12 +406,10 @@ Gemini: {bot_response_text_raw}"
                 summary_text = await summarize_history(messages_to_summarize)
                 new_history = []
                 if summary_text:
+                    # Этот if тоже имеет дополнительный отступ, так как он вложен
                     new_history.append({'role': 'model', 'parts': [f"Это краткое содержание нашего предыдущего разговора: {summary_text}"]})
                 new_history.extend(remaining_history)
                 context.user_data['history'] = new_history
-
-            ### УДАЛЕНО ###
-            # Вызов save_history() удален.
 
         except Exception as e:
             logger.error(f"Произошла критическая ошибка в process_user_request для {user_id}: {e}", exc_info=True)
