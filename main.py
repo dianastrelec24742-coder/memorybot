@@ -336,64 +336,76 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                 logger.info(f"Найдено в LTM для {user_id}: '{long_term_context}'")
 
             # === ФОРМИРОВАНИЕ ПРОМПТА И ГЕНЕРАЦИЯ ОТВЕТА ===
+            # === ФОРМИРОВАНИЕ ПРОМПТА И ГЕНЕРАЦИЯ ОТВЕТА ===
+            # --- Шаг 1: Формируем историю для API вызова ОДИН РАЗ ---
             api_call_history = list(context.user_data['history'])
             if long_term_context:
                 context_message = f"ОБЯЗАТЕЛЬНЫЙ КОНТЕКСТ: Вот некоторые факты из нашей долгосрочной памяти, которые могут быть релевантны: «{long_term_context}». Используй их для ответа."
                 api_call_history.insert(0, {'role': 'model', 'parts': [context_message]})
             
             api_call_history.append({'role': 'user', 'parts': user_parts})
-            
-            # Логика самокоррекции и обработки цензуры (без изменений)
+            final_user_input_for_ltm = original_user_input
+
+            # --- Шаг 2: Цикл генерации с корректной логикой ---
             max_attempts = 3
             response = None
-            bot_response_text_raw = ""
-            final_user_input_for_ltm = original_user_input
+            
             for attempt in range(max_attempts):
                 logger.info(f"Попытка генерации/коррекции №{attempt + 1}...")
                 response = await generate_with_retry(user_specific_model.generate_content_async, api_call_history)
+
+                if response and response.parts:
+                    logger.info("Ответ от Gemini успешно получен.")
+                    break 
 
                 if not response.candidates:
                     logger.warning(f"Цензура [Тип 1: Жесткая блокировка] для {user_id}. Запускаю смягчитель запроса.")
                     last_user_prompt = " ".join(part for part in api_call_history[-1]['parts'] if isinstance(part, str))
                     if last_user_prompt:
                         softened_prompt = await soften_user_prompt_if_needed(last_user_prompt, user_id)
-                        api_call_history[-1]['parts'] = [softened_prompt]
+                        api_call_history[-1]['parts'] = [softened_prompt] 
                         final_user_input_for_ltm = softened_prompt
                         continue
                     else:
                         logger.error("Не удалось извлечь текст запроса для смягчения.")
+                        response = None
                         break
                 
-                is_safety_blocked = (response.candidates[0].finish_reason == 3)
+                is_safety_blocked = (response.candidates and not response.parts and response.candidates[0].finish_reason == 3)
                 if is_safety_blocked:
-                    logger.warning(f"Цензура [Тип 2: Блокировка ответа] для {user_id}. Запускаю самокоррекцию.")
-                    api_call_history.append({'role': 'model', 'parts': ["СИСТЕМНАЯ ЗАМЕТКА: Твой предыдущий ответ был заблокирован. Переформулируй."] })
+                    logger.warning(f"Цензура [Тип 2: Блокировка ответа - SAFETY] для {user_id}. Запускаю самокоррекцию ответа.")
+                    correction_prompt = {'role': 'model', 'parts': ["СИСТЕМНАЯ ЗАМЕТКА: Твой предыдущий ответ был заблокирован. Переформулируй."]}
+                    api_call_history.append(correction_prompt)
                     continue
 
-                break 
+                logger.warning(f"Не удалось получить ответ, но это не блокировка цензуры. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'N/A'}")
+                response = None
+                break
+            
+            # --- Шаг 3: Обрабатываем результат ПОСЛЕ цикла ---
+            bot_response_text_raw = ""
+            response_was_successful = False
 
-                        # Мы проверяем не наличие 'parts', а наличие самого текста в ответе.
-            # Проверяем, удалось ли получить адекватный ответ от Gemini
-            if response and response.text and response.text.strip():
-                # --- БЛОК УСПЕШНОГО ОТВЕТА ---
-                bot_response_text_raw = response.text.strip()
+            if response and response.parts:
+                bot_response_text_raw = response.text
+                response_was_successful = True
                 
-                # 1. Добавляем диалог в краткосрочную историю
+                # Обновление истории: добавляем и запрос, и ответ в основную историю
                 context.user_data['history'].append({'role': 'user', 'parts': user_parts})
                 context.user_data['history'].append({'role': 'model', 'parts': [bot_response_text_raw]})
+            else:
+                bot_response_text_raw = "Мне почему-то не удалось сформулировать ответ. Возможно, мой внутренний фильтр сработал слишком сильно. Попробуй перефразировать свой запрос."
+                logger.error(f"Не удалось сгенерировать ответ для {user_id} после {max_attempts} попыток.")
 
-                # 2. ✅ ВОТ ИСПРАВЛЕНИЕ: СРАЗУ ЖЕ сохраняем успешный диалог в долгосрочную память
+            # --- Шаг 4: Отправка и сохранение ---
+            await send_long_message(context, chat_id, bot_response_text_raw, parse_mode='MarkdownV2')
+
+            if response_was_successful:
                 logger.info(f"Сохраняем диалог в долгосрочную память для {user_id}...")
                 full_context_chunk = f"Пользователь: {final_user_input_for_ltm}\nGemini: {bot_response_text_raw}"
                 await ltm.add_to_memory(full_context_chunk)
-
-            else:
-                # --- БЛОК НЕУДАЧНОГО ОТВЕТА ---
-                bot_response_text_raw = "Мне почему-то не удалось сформулировать ответ. Возможно, мой внутренний фильтр сработал. Попробуй перефразировать свой запрос."
-                logger.error(f"Не удалось сгенерировать ответ для {user_id} (ответ от API был пуст или заблокирован).")
-
-            # Отправляем сообщение пользователю (либо успешный ответ, либо сообщение об ошибке)
-            await send_long_message(context, chat_id, bot_response_text_raw, parse_mode='MarkdownV2')
+                logger.info(f"Сохранение в LTM для {user_id} завершено.")
+            
 
             # === СЖАТИЕ ИСТОРИИ (этот блок выполняется всегда в конце) ===
             if len(context.user_data['history']) > config.MAX_HISTORY_MESSAGES:
