@@ -372,6 +372,10 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                 logger.info(f"Попытка генерации/коррекции №{attempt + 1}...")
                 response = await generate_with_retry(user_specific_model.generate_content_async, api_call_history)
 
+                # --- ДОБАВЬТЕ ЭТУ СТРОКУ ---
+                logger.info(f"ПОЛНЫЙ ОТВЕТ GEMINI: {repr(response)}")
+                # ---------------------------
+
                 # --- Единая и четкая логика ---
                 # 1. Полный провал API (функция-помощник вернула None)
                 if not response:
