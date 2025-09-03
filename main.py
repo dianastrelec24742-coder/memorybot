@@ -104,19 +104,34 @@ async def generate_with_retry(model_function, *args, **kwargs):
     for attempt in range(max_retries):
         try:
             response = await model_function(*args, **kwargs)
-            return response
+            # Добавим проверку: если ответ есть, но он пустой (без 'parts' и 'candidates'), 
+            # это тоже может быть проблемой. Считаем это неудачей.
+            if response and not response.parts and not response.candidates:
+                logger.warning(f"API вернул пустой, но валидный ответ (попытка {attempt + 1}/{max_retries}). Повторяем...")
+                if attempt + 1 == max_retries:
+                    logger.error("Все попытки исчерпаны. API стабильно возвращает пустой ответ.")
+                    return None # Возвращаем None вместо падения
+                await asyncio.sleep(base_delay)
+                base_delay *= 2
+                continue
+            return response # Успешный выход
+            
         except Exception as e:
-            if "500" in str(e) or "internal error" in str(e).lower():
+            error_str = str(e).lower()
+            # Проверяем на ошибки, которые стоит повторить
+            if "500" in error_str or "internal error" in error_str or "service unavailable" in error_str:
                 logger.warning(f"Ошибка API (попытка {attempt + 1}/{max_retries}): {e}. Повтор через {base_delay} сек.")
                 if attempt + 1 == max_retries:
                     logger.error("Все попытки исчерпаны. Не удалось получить ответ от API.")
-                    raise e
+                    return None # Возвращаем None, а не падаем
                 await asyncio.sleep(base_delay)
                 base_delay *= 2
             else:
+                # Если ошибка другая (например, 400 Bad Request, ValueError), не повторяем, а сразу выходим
                 logger.error(f"Неустранимая ошибка API: {e}")
-                raise e
-
+                return None # <<< ГЛАВНОЕ ИЗМЕНЕНИЕ: Возвращаем None, а не делаем 'raise e'
+                
+        return None
 async def summarize_history(history_chunk: list) -> str:
     if not history_chunk: return ""
     logger.info("Запущена функция создания конспекта истории...")
@@ -177,8 +192,7 @@ async def send_long_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, te
 
 async def router_check(user_input: str, chat_history: list) -> bool:
     if not user_input: return False
-    history_str = "\
-".join([f"{msg['role']}: {msg['parts'][0]}" for msg in chat_history[-4:]])
+    history_str = "\n".join([f"{msg['role']}: {msg['parts'][0]}" for msg in chat_history[-4:]])
     prompt = f"""Ты — ИИ-роутер. Проанализируй ПОСЛЕДНИЙ ЗАПРОС пользователя в контексте диалога и реши, нужно ли искать информацию в долгосрочной памяти.
 Правила:
 1. Если запрос — общий вопрос, приветствие, прощание, благодарность, не требующее воспоминаний, ответь: context_sufficient
@@ -190,6 +204,12 @@ async def router_check(user_input: str, chat_history: list) -> bool:
 """
     try:
         response = await generate_with_retry(router_model.generate_content_async, prompt)
+        
+        # --- ВОТ ЭТА ПРОВЕРКА ВСЁ РЕШАЕТ ---
+        if not response or not response.parts:
+            logger.error(f"[ROUTER] Не удалось получить ответ от API. По умолчанию считаем, что поиск нужен.")
+            return True # Безопасный выход, если API не ответил
+
         decision = response.text.strip().lower()
         logger.info(f"[ROUTER] Решение: {decision} для запроса: '{user_input}'")
         return decision == 'search_needed'
@@ -335,9 +355,7 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                 long_term_context = ". ".join(found_facts)
                 logger.info(f"Найдено в LTM для {user_id}: '{long_term_context}'")
 
-            # === ФОРМИРОВАНИЕ ПРОМПТА И ГЕНЕРАЦИЯ ОТВЕТА ===
-            # === ФОРМИРОВАНИЕ ПРОМПТА И ГЕНЕРАЦИЯ ОТВЕТА ===
-            # --- Шаг 1: Формируем историю для API вызова ОДИН РАЗ ---
+            # === ФОРМИРОВАНИЕ ПРОМПТА И ГЕНЕРАЦИЯ ОТВЕТА ===            # --- Шаг 1: Формируем историю для API вызова ОДИН РАЗ ---
             api_call_history = list(context.user_data['history'])
             if long_term_context:
                 context_message = f"ОБЯЗАТЕЛЬНЫЙ КОНТЕКСТ: Вот некоторые факты из нашей долгосрочной памяти, которые могут быть релевантны: «{long_term_context}». Используй их для ответа."
@@ -354,10 +372,24 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                 logger.info(f"Попытка генерации/коррекции №{attempt + 1}...")
                 response = await generate_with_retry(user_specific_model.generate_content_async, api_call_history)
 
-                if response and response.parts:
+                # --- Единая и четкая логика ---
+                # 1. Полный провал API (функция-помощник вернула None)
+                if not response:
+                    logger.error(f"generate_with_retry вернула None на попытке {attempt + 1}. API не отвечает или вернул ошибку.")
+                    # Если это последняя попытка, цикл просто завершится и response останется None
+                    if attempt + 1 < max_attempts:
+                        await asyncio.sleep(1) # небольшая пауза перед следующей попыткой
+                        continue
+                    else:
+                        break # выходим из цикла с response = None
+
+                # 2. Успешный ответ
+                if response.parts:
                     logger.info("Ответ от Gemini успешно получен.")
                     break 
 
+                # 3. Блокировка цензурой (разные типы)
+                # Тип 1: Жесткая блокировка (нет даже кандидатов)
                 if not response.candidates:
                     logger.warning(f"Цензура [Тип 1: Жесткая блокировка] для {user_id}. Запускаю смягчитель запроса.")
                     last_user_prompt = " ".join(part for part in api_call_history[-1]['parts'] if isinstance(part, str))
@@ -365,22 +397,25 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                         softened_prompt = await soften_user_prompt_if_needed(last_user_prompt, user_id)
                         api_call_history[-1]['parts'] = [softened_prompt] 
                         final_user_input_for_ltm = softened_prompt
-                        continue
+                        continue # Переходим к следующей попытке с новым промптом
                     else:
                         logger.error("Не удалось извлечь текст запроса для смягчения.")
-                        response = None
+                        response = None # Сбрасываем response, чтобы выйти с ошибкой
                         break
                 
-                is_safety_blocked = (response.candidates and not response.parts and response.candidates[0].finish_reason == 3)
+                # Тип 2: Блокировка ответа по причине SAFETY
+                is_safety_blocked = (response.candidates[0].finish_reason == 3)
                 if is_safety_blocked:
                     logger.warning(f"Цензура [Тип 2: Блокировка ответа - SAFETY] для {user_id}. Запускаю самокоррекцию ответа.")
                     correction_prompt = {'role': 'model', 'parts': ["СИСТЕМНАЯ ЗАМЕТКА: Твой предыдущий ответ был заблокирован. Переформулируй."]}
                     api_call_history.append(correction_prompt)
-                    continue
+                    continue # Переходим к следующей попытке с просьбой о коррекции
 
-                logger.warning(f"Не удалось получить ответ, но это не блокировка цензуры. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'N/A'}")
-                response = None
+                # 4. Другие причины отсутствия ответа (например, finish_reason = OTHER)
+                logger.warning(f"Не удалось получить ответ, но это не блокировка цензуры. Finish reason: {response.candidates[0].finish_reason}")
+                response = None # Считаем это провалом
                 break
+
             
             # --- Шаг 3: Обрабатываем результат ПОСЛЕ цикла ---
             bot_response_text_raw = ""
