@@ -24,6 +24,10 @@ from memory_core import MemoryCore
 # ### ДОБАВЛЕНО ### Импортируем наш новый файл конфигурации
 import config
 
+allowed_ids_str = os.getenv("ALLOWED_USER_IDS", "")
+ALLOWED_USER_IDS = [int(user_id) for user_id in allowed_ids_str.split(',') if user_id]
+
+
 # --- ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКИ ---
 user_locks = defaultdict(asyncio.Lock)
 
@@ -221,6 +225,10 @@ async def router_check(user_input: str, chat_history: list) -> bool:
 
 async def show_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
     if 'ltm' not in context.user_data:
         context.user_data['ltm'] = await MemoryCore.create(user_id=user_id, limit=config.LTM_SLOT_LIMIT)
     ltm = context.user_data['ltm']
@@ -245,6 +253,10 @@ async def show_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def remember_fact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
     if not context.args or len(context.args) < 2:
         await update.message.reply_text( "Неверный формат. Используйте: `/запомни <ключ> <текст факта>`")
         return
@@ -263,6 +275,10 @@ async def remember_fact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def forget_fact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text("Неверный формат. Используйте: `/забудь <ID факта>`")
         return
@@ -287,6 +303,10 @@ async def forget_fact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def recategorize_fact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text("Неверный формат. Используйте: `/сделай_обычным <ID факта>`")
         return
@@ -425,12 +445,13 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
             bot_response_text_raw = ""
             response_was_successful = False
 
-            if response and response.parts:
-                bot_response_text_raw = response.text
+            if response and response.candidates:
+                bot_response_text_raw = response.candidates[0].content.parts[0].text
                 response_was_successful = True
                 
-                # Обновление истории: добавляем и запрос, и ответ в основную историю
+                # Обновление истории...
                 context.user_data['history'].append({'role': 'user', 'parts': user_parts})
+                # В историю сохраняем тоже в формате 'parts' для единообразия
                 context.user_data['history'].append({'role': 'model', 'parts': [bot_response_text_raw]})
             else:
                 bot_response_text_raw = "Мне почему-то не удалось сформулировать ответ. Возможно, мой внутренний фильтр сработал слишком сильно. Попробуй перефразировать свой запрос."
@@ -485,12 +506,21 @@ async def route_natural_command(update: Update, context: ContextTypes.DEFAULT_TY
     return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
     await update.message.reply_html(f"Привет, {update.effective_user.mention_html()}! Я готов к работе.")
 
 async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
     if await route_natural_command(update, context): return
     message = update.message
-    user_id = update.effective_user.id
     user_text = message.text or message.caption or ""
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     user_parts = [user_text] if user_text else []
@@ -502,8 +532,12 @@ async def handle_text_and_photo(update: Update, context: ContextTypes.DEFAULT_TY
     await process_user_request(context, user_id, message.chat_id, user_parts, user_text)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.message
     user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
+    message = update.message
     status_message = await message.reply_text("Обрабатываю ваше голосовое сообщение...")
     oga_filename, wav_filename = f"{message.voice.file_id}.oga", f"{message.voice.file_id}.wav"
     try:
@@ -532,6 +566,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if os.path.exists(wav_filename): os.remove(wav_filename)
         
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Попытка несанкционированного доступа от пользователя с ID: {user_id}")
+        await update.message.reply_text("Извините, у вас нет доступа к этому боту.")
+        return 
     message = update.message
     status_message = await message.reply_text("Получаю ваш файл...")
     try:
