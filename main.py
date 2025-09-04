@@ -388,7 +388,7 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                         break # выходим из цикла с response = None
 
                 # 2. Успешный ответ
-                if response.parts:
+                if response.candidates:
                     logger.info("Ответ от Gemini успешно получен.")
                     break 
 
