@@ -54,7 +54,7 @@ except Exception as e:
     exit()
 
 # --- ФУНКЦИИ-ПОМОЩНИКИ (без изменений) ---
-
+'''
 def format_and_escape(text: str) -> str:
     pattern = r'(\\*\\*.*?\\*\\*|__.*?__|```.*?```)'
     result_parts = []
@@ -101,7 +101,7 @@ async def soften_user_prompt_if_needed(user_prompt: str, user_id: int) -> str:
     except Exception as e:
         logger.error(f"Ошибка в функции смягчения запроса: {e}. Возвращаю оригинальный запрос.")
         return user_prompt
-
+'''
 async def generate_with_retry(model_function, *args, **kwargs):
     max_retries = 3
     base_delay = 1
@@ -180,7 +180,7 @@ async def send_long_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, te
     try:
         for part in parts:
             if not part.strip(): continue
-            formatted_part = format_and_escape(part)
+            formatted_part = escape_markdown(part, version=2)
             await context.bot.send_message(chat_id=chat_id, text=formatted_part, parse_mode=parse_mode)
             await asyncio.sleep(0.1)
     except telegram.error.BadRequest as e:
@@ -445,8 +445,8 @@ async def process_user_request(context: ContextTypes.DEFAULT_TYPE, user_id: int,
             bot_response_text_raw = ""
             response_was_successful = False
 
-            if response and response.candidates:
-                bot_response_text_raw = response.candidates[0].content.parts[0].text
+            if response and response.text:
+                bot_response_text_raw = response.text
                 response_was_successful = True
                 
                 # Обновление истории...
