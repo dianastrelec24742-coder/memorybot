@@ -142,8 +142,8 @@ async def summarize_history(history_chunk: list) -> str:
     text_to_summarize = "\
 ".join([f"{msg['role']}: {' '.join(str(p) for p in msg.get('parts', []))}" for msg in history_chunk])
     try:
-        summarizer_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"Ниже приведен фрагмент диалога. Напиши очень краткое содержание этого разговора в 1-2 предложениях, сохранив ключевые факты и намерения.\n\nФрагмент:\n---\n{text_to_summarize}\n---\n\nКраткое содержание:"
+        summarizer_model = genai.GenerativeModel('gemini-2.0-flash')
+        prompt = f"Ниже приведен фрагмент диалога. Суммаризируй содержание этого диалога, сохранив ключевые факты и намерения. Объем суммаризированного текста не должен превышать 5000 символов.\n\nФрагмент:\n---\n{text_to_summarize}\n---\n\nКраткое содержание:"
         response = await summarizer_model.generate_content_async(prompt)
         summary = response.text.strip()
         logger.info(f"Конспект успешно создан: {summary}")
@@ -585,7 +585,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             file_bytes = await doc_file.download_as_bytearray()
             file_content = file_bytes.decode('utf-8')
             prompt = f"Проанализируй содержимое файла «{document.file_name}» и дай свой ответ.\n\n--- НАЧАЛО ---\n{file_content}\n--- КОНЕЦ ---"
-            await process_user_request(context, message.effective_user.id, message.chat_id, [prompt], prompt)
+            await process_user_request(context, update.effective_user.id, message.chat_id, [prompt], prompt)
             await status_message.delete()
     except Exception as e:
         logger.error(f"Не удалось обработать файл: {e}", exc_info=True)
